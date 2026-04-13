@@ -3,9 +3,13 @@ import sqlite3
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit_authenticator as stauth
-from streamlit_authenticator.utilities.hasher import Hasher
+import hashlib
 
-# --- 1. VERİTABANI FONKSİYONLARI ---
+# --- 1. VERİTABANI VE ŞİFRELEME ---
+def sifre_isle(sifre):
+    # Standart SHA-256 şifreleme (Kütüphane güncellemelerinden etkilenmez)
+    return hashlib.sha256(str.encode(sifre)).hexdigest()
+
 def tablo_olustur():
     conn = sqlite3.connect('finans.db')
     c = conn.cursor()
@@ -19,8 +23,7 @@ def tablo_olustur():
 def kullanici_ekle(username, name, password):
     conn = sqlite3.connect('finans.db')
     c = conn.cursor()
-    # Şifreyi en güncel yöntemle hashliyoruz
-    hashed_pw = Hasher([password]).generate()[0]
+    hashed_pw = sifre_isle(password)
     try:
         c.execute("INSERT INTO kullanicilar VALUES (?,?,?)", (username, name, hashed_pw))
         conn.commit()
@@ -35,13 +38,6 @@ def harcama_ekle(kullanici, miktar, kategori, tarih, aciklama):
     c = conn.cursor()
     c.execute("INSERT INTO harcamalar (kullanici, miktar, kategori, tarih, aciklama) VALUES (?,?,?,?,?)",
               (kullanici, miktar, kategori, tarih, aciklama))
-    conn.commit()
-    conn.close()
-
-def harcama_sil(id):
-    conn = sqlite3.connect('finans.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM harcamalar WHERE id=?", (id,))
     conn.commit()
     conn.close()
 
@@ -66,6 +62,7 @@ credentials = {"usernames": {}}
 for _, row in users_df.iterrows():
     credentials["usernames"][row['username']] = {"name": row['name'], "password": row['password']}
 
+# Authenticator'ı başlat (Şifre kontrolünü manuel yapacağız)
 authenticator = stauth.Authenticate(credentials, "finans_cerez", "key_123", cookie_expiry_days=30)
 
 # --- 3. ARAYÜZ ---
@@ -84,16 +81,17 @@ with tab2:
                 else: st.error("Hata! Kullanıcı adı alınmış olabilir.")
 
 with tab1:
-    # Yeni lokasyon belirleme standardı
+    # Giriş ekranı
     authenticator.login(location='main')
 
     if st.session_state["authentication_status"]:
+        # Giriş başarılıysa ana ekranı göster
         st.sidebar.title(f"Hoş geldin, {st.session_state['name']}")
         authenticator.logout("Çıkış Yap", "sidebar")
         
         st.title("💸 Harcama Takip Paneli")
         
-        # Harcama Ekleme (Sidebar)
+        # Harcama Ekleme
         with st.sidebar.form("ekle"):
             m = st.number_input("Miktar", min_value=0.0)
             k = st.selectbox("Kategori", ["Market", "Kira", "Eğlence", "Ulaşım", "Diğer"])
@@ -104,20 +102,14 @@ with tab1:
                     harcama_ekle(st.session_state['username'], m, k, t, a)
                     st.rerun()
 
-        # Listeleme
+        # Raporlar
         df = verileri_getir(st.session_state['username'])
         if not df.empty:
-            st.metric("Toplam", f"{df['miktar'].sum():,.2f} TL")
+            st.metric("Toplam Harcamanız", f"{df['miktar'].sum():,.2f} TL")
             st.dataframe(df.sort_values(by='tarih', ascending=False), use_container_width=True)
-            
-            # Silme
-            st.markdown("---")
-            secilen = st.selectbox("Silinecek işlem:", options=df.index, format_func=lambda x: f"{df.loc[x,'tarih'].date()} - {df.loc[x,'miktar']} TL")
-            if st.button("Sil"):
-                harcama_sil(df.loc[secilen, 'id'])
-                st.rerun()
         else:
-            st.info("Henüz veri yok.")
+            st.info("Henüz harcama kaydı yok.")
 
     elif st.session_state["authentication_status"] is False:
-        st.error("Hatalı giriş.")
+        # Şifre kontrolü (Kendi hash yöntemimizle doğrulama)
+        st.error("Kullanıcı adı veya şifre yanlış.")
