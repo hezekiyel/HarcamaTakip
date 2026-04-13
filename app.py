@@ -1,10 +1,12 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-import streamlit_authenticator as stauth
 import hashlib
 
-# 1. VERİTABANI
+# --- 1. FONKSİYONLAR ---
+def sifre_isle(sifre):
+    return hashlib.sha256(str.encode(sifre)).hexdigest()
+
 def tablo_olustur():
     conn = sqlite3.connect('finans.db')
     c = conn.cursor()
@@ -15,17 +17,10 @@ def tablo_olustur():
     conn.commit()
     conn.close()
 
-def tabloyu_temizle():
-    # Eğer yapı değişirse hata almamak için
-    conn = sqlite3.connect('finans.db')
-    c = conn.cursor()
-    conn.commit()
-    conn.close()
-
 def kullanici_ekle(username, name, password):
     conn = sqlite3.connect('finans.db')
     c = conn.cursor()
-    hashed_pw = hashlib.sha256(str.encode(password)).hexdigest()
+    hashed_pw = sifre_isle(password)
     try:
         c.execute("INSERT INTO kullanicilar VALUES (?,?,?)", (username, name, hashed_pw))
         conn.commit()
@@ -33,39 +28,65 @@ def kullanici_ekle(username, name, password):
     except: return False
     finally: conn.close()
 
-# 2. AYARLAR
+def giris_kontrol(username, password):
+    conn = sqlite3.connect('finans.db')
+    c = conn.cursor()
+    hashed_pw = sifre_isle(password)
+    c.execute("SELECT * FROM kullanicilar WHERE username=? AND password=?", (username, hashed_pw))
+    user = c.fetchone()
+    conn.close()
+    return user
+
+# --- 2. SAYFA AYARLARI ---
 st.set_page_config(page_title="Finans Takip", layout="wide")
 tablo_olustur()
 
-# Kullanıcı yükleme
-conn = sqlite3.connect('finans.db')
-users_df = pd.read_sql_query("SELECT * FROM kullanicilar", conn)
-conn.close()
+# Oturum Durumu Başlatma
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+if 'user_name' not in st.session_state:
+    st.session_state['user_name'] = ""
 
-credentials = {"usernames": {}}
-for _, row in users_df.iterrows():
-    credentials["usernames"][row['username']] = {"name": row['name'], "password": row['password']}
+# --- 3. GİRİŞ VE KAYIT EKRANI ---
+if not st.session_state['logged_in']:
+    st.title("🔐 Finans Takip Sistemi")
+    tab1, tab2 = st.tabs(["Giriş Yap", "Kayıt Ol"])
 
-authenticator = stauth.Authenticate(credentials, "cerez_finans", "anahtar_123", cookie_expiry_days=0)
+    with tab2:
+        with st.form("kayit_form"):
+            new_u = st.text_input("Kullanıcı Adı")
+            new_n = st.text_input("İsim Soyisim")
+            new_p = st.text_input("Şifre", type="password")
+            if st.form_submit_button("Kaydol"):
+                if new_u and new_p:
+                    if kullanici_ekle(new_u, new_n, new_p):
+                        st.success("Kayıt başarılı! Şimdi giriş yapabilirsin.")
+                    else: st.error("Bu kullanıcı adı alınmış.")
+                else: st.warning("Alanları doldur kanka.")
 
-# 3. ARAYÜZ
-tab1, tab2 = st.tabs(["Giriş Yap", "Kayıt Ol"])
+    with tab1:
+        with st.form("giris_form"):
+            u = st.text_input("Kullanıcı Adı")
+            p = st.text_input("Şifre", type="password")
+            if st.form_submit_button("Giriş"):
+                user = giris_kontrol(u, p)
+                if user:
+                    st.session_state['logged_in'] = True
+                    st.session_state['user_name'] = user[0]
+                    st.session_state['display_name'] = user[1]
+                    st.rerun()
+                else:
+                    st.error("Kullanıcı adı veya şifre yanlış.")
 
-with tab2:
-    with st.form("kayit"):
-        u = st.text_input("Kullanıcı Adı")
-        n = st.text_input("İsim")
-        p = st.text_input("Şifre", type="password")
-        if st.form_submit_button("Kaydol"):
-            if u and n and p:
-                if kullanici_ekle(u, n, p): st.success("Tamamdır, giriş yapabilirsin!")
-                else: st.error("Kullanıcı adı kullanımda.")
+# --- 4. ANA UYGULAMA (GİRİŞ YAPILDIYSA) ---
+else:
+    st.sidebar.success(f"Hoş geldin, {st.session_state['display_name']}")
+    if st.sidebar.button("Çıkış Yap"):
+        st.session_state['logged_in'] = False
+        st.rerun()
 
-with tab1:
-    authenticator.login(location='main')
-    if st.session_state["authentication_status"]:
-        st.write(f"### Hoş geldin {st.session_state['name']}!")
-        authenticator.logout("Çıkış", "sidebar")
-        st.info("Harcama modülü aktif edildi. Veri girebilirsin.")
-    elif st.session_state["authentication_status"] is False:
-        st.error("Hatalı giriş.")
+    st.title(f"📊 {st.session_state['display_name']} - Harcama Paneli")
+    st.info("Sistemin tıkır tıkır çalışıyor. Buraya harcama kodlarını ekleyebilirsin!")
+    
+    # Buraya daha önce yazdığımız harcama ekleme ve listeleme kodlarını koyabiliriz.
+    # Ama önce bu girişin çalıştığını bir görelim!
