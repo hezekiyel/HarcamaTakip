@@ -3,18 +3,14 @@ import sqlite3
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit_authenticator as stauth
+from streamlit_authenticator.utilities.hasher import Hasher
 
 # --- 1. VERİTABANI FONKSİYONLARI ---
 def tablo_olustur():
     conn = sqlite3.connect('finans.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS harcamalar
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  kullanici TEXT,
-                  miktar REAL, 
-                  kategori TEXT, 
-                  tarih DATE, 
-                  aciklama TEXT)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, kullanici TEXT, miktar REAL, kategori TEXT, tarih DATE, aciklama TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS kullanicilar
                  (username TEXT PRIMARY KEY, name TEXT, password TEXT)''')
     conn.commit()
@@ -23,8 +19,8 @@ def tablo_olustur():
 def kullanici_ekle(username, name, password):
     conn = sqlite3.connect('finans.db')
     c = conn.cursor()
-    # Şifreyi hashleyerek kaydediyoruz
-    hashed_pw = stauth.Hasher([password]).generate()[0]
+    # Şifreyi en güncel yöntemle hashliyoruz
+    hashed_pw = Hasher([password]).generate()[0]
     try:
         c.execute("INSERT INTO kullanicilar VALUES (?,?,?)", (username, name, hashed_pw))
         conn.commit()
@@ -51,19 +47,14 @@ def harcama_sil(id):
 
 def verileri_getir(kullanici):
     conn = sqlite3.connect('finans.db')
-    query = f"SELECT * FROM harcamalar WHERE kullanici = '{kullanici}'"
-    df = pd.read_sql_query(query, conn)
+    df = pd.read_sql_query(f"SELECT * FROM harcamalar WHERE kullanici = '{kullanici}'", conn)
     conn.close()
     if not df.empty:
         df['tarih'] = pd.to_datetime(df['tarih'])
-        ay_map = {1:'Ocak', 2:'Şubat', 3:'Mart', 4:'Nisan', 5:'Mayıs', 6:'Haziran',
-                  7:'Temmuz', 8:'Ağustos', 9:'Eylül', 10:'Ekim', 11:'Kasım', 12:'Aralık'}
-        df['Ay_Adi'] = df['tarih'].dt.month.map(ay_map)
-        df['Yil'] = df['tarih'].dt.year
     return df
 
-# --- 2. BAŞLATMA VE AUTH AYARLARI ---
-st.set_page_config(page_title="Pro Finans Portalı", layout="wide")
+# --- 2. BAŞLATMA ---
+st.set_page_config(page_title="Finans Portalı", layout="wide")
 tablo_olustur()
 
 # Kullanıcıları yükle
@@ -73,93 +64,60 @@ conn.close()
 
 credentials = {"usernames": {}}
 for _, row in users_df.iterrows():
-    credentials["usernames"][row['username']] = {
-        "name": row['name'],
-        "password": row['password']
-    }
+    credentials["usernames"][row['username']] = {"name": row['name'], "password": row['password']}
 
-authenticator = stauth.Authenticate(
-    credentials,
-    "finans_takip_cerez",
-    "anahtar_kelime",
-    cookie_expiry_days=30
-)
+authenticator = stauth.Authenticate(credentials, "finans_cerez", "key_123", cookie_expiry_days=30)
 
-# --- 3. ARAYÜZ (TABS) ---
+# --- 3. ARAYÜZ ---
 tab1, tab2 = st.tabs(["🔑 Giriş Yap", "📝 Yeni Kayıt"])
 
 with tab2:
-    st.subheader("Yeni Hesap Oluştur")
-    with st.form("kayit_formu"):
-        new_user = st.text_input("Kullanıcı Adı")
-        new_name = st.text_input("İsim Soyisim")
-        new_pw = st.text_input("Şifre", type="password")
+    st.subheader("Yeni Kayıt")
+    with st.form("kayit"):
+        u = st.text_input("Kullanıcı Adı")
+        n = st.text_input("İsim Soyisim")
+        p = st.text_input("Şifre", type="password")
         if st.form_submit_button("Kaydol"):
-            if new_user and new_name and new_pw:
-                if kullanici_ekle(new_user, new_name, new_pw):
-                    st.success("Kayıt başarılı! Giriş sekmesine gidiniz.")
-                else:
-                    st.error("Bu kullanıcı adı alınmış veya bir hata oluştu.")
-            else:
-                st.warning("Lütfen tüm alanları doldurun.")
+            if u and n and p:
+                if kullanici_ekle(u, n, p):
+                    st.success("Kayıt başarılı! Giriş sekmesine geçiniz.")
+                else: st.error("Hata! Kullanıcı adı alınmış olabilir.")
 
 with tab1:
-    # Hata aldığın kritik satırın düzeltilmiş hali:
+    # Yeni lokasyon belirleme standardı
     authenticator.login(location='main')
 
     if st.session_state["authentication_status"]:
-        # GİRİŞ BAŞARILI
-        username = st.session_state["username"]
-        name = st.session_state["name"]
-        
-        st.sidebar.title(f"Hoş geldin, {name}")
+        st.sidebar.title(f"Hoş geldin, {st.session_state['name']}")
         authenticator.logout("Çıkış Yap", "sidebar")
         
-        st.title("💸 Kişisel Finans Panelim")
+        st.title("💸 Harcama Takip Paneli")
         
-        # VERİ GİRİŞİ
-        st.sidebar.header("➕ Harcama Ekle")
-        with st.sidebar.form("ekle_form", clear_on_submit=True):
-            miktar = st.number_input("Miktar (TL)", min_value=0.0)
-            kat = st.selectbox("Kategori", ["Market", "Kira", "Eğlence", "Ulaşım", "Sağlık", "Eğitim", "Diğer"])
-            tarih = st.date_input("Tarih")
-            not_ = st.text_input("Not/Açıklama")
-            if st.form_submit_button("Veritabanına İşle"):
-                if miktar > 0:
-                    harcama_ekle(username, miktar, kat, tarih, not_)
+        # Harcama Ekleme (Sidebar)
+        with st.sidebar.form("ekle"):
+            m = st.number_input("Miktar", min_value=0.0)
+            k = st.selectbox("Kategori", ["Market", "Kira", "Eğlence", "Ulaşım", "Diğer"])
+            t = st.date_input("Tarih")
+            a = st.text_input("Açıklama")
+            if st.form_submit_button("Ekle"):
+                if m > 0:
+                    harcama_ekle(st.session_state['username'], m, k, t, a)
                     st.rerun()
 
-        # RAPORLAMA
-        df = verileri_getir(username)
+        # Listeleme
+        df = verileri_getir(st.session_state['username'])
         if not df.empty:
-            st.subheader("📊 Harcama Özetiniz")
-            st.metric("Toplam Harcama", f"{df['miktar'].sum():,.2f} TL")
+            st.metric("Toplam", f"{df['miktar'].sum():,.2f} TL")
+            st.dataframe(df.sort_values(by='tarih', ascending=False), use_container_width=True)
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("📋 Son İşlemler")
-                st.dataframe(df.sort_values(by='tarih', ascending=False)[['tarih', 'kategori', 'miktar', 'aciklama']], use_container_width=True)
-            
-            with c2:
-                st.subheader("🍕 Kategori Dağılımı")
-                kat_ozet = df.groupby("kategori")["miktar"].sum()
-                fig, ax = plt.subplots()
-                ax.pie(kat_ozet, labels=kat_ozet.index, autopct='%1.1f%%', startangle=140)
-                st.pyplot(fig)
-
-            # SİLME BÖLÜMÜ
+            # Silme
             st.markdown("---")
-            st.subheader("🗑️ Kayıt Sil")
-            silinecek = st.selectbox("Silinecek harcamayı seçin:", options=df.index,
-                                    format_func=lambda x: f"{df.loc[x,'tarih'].date()} - {df.loc[x,'kategori']} - {df.loc[x,'miktar']} TL")
-            if st.button("Seçili Kaydı Sil", type="primary"):
-                harcama_sil(df.loc[silinecek, 'id'])
-                st.success("Silindi!")
+            secilen = st.selectbox("Silinecek işlem:", options=df.index, format_func=lambda x: f"{df.loc[x,'tarih'].date()} - {df.loc[x,'miktar']} TL")
+            if st.button("Sil"):
+                harcama_sil(df.loc[secilen, 'id'])
                 st.rerun()
         else:
-            st.info("Henüz harcama kaydınız yok. Sol menüden ekleyebilirsiniz.")
+            st.info("Henüz veri yok.")
 
     elif st.session_state["authentication_status"] is False:
-        st.error("Kullanıcı adı veya şifre yanlış.")
-    elif st.session_state["authentication_status"] is None:
-        st.warning("Uygulamaya erişmek için giriş yapın.")
+        st.error("Hatalı giriş.")
