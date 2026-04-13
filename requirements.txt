@@ -1,4 +1,3 @@
 streamlit==1.32.0
 pandas
 matplotlib
-streamlit-authenticator==0.3.1
